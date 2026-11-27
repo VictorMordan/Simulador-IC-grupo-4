@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simulador Visual de Topología de Red Aduanera</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #090e1a;
+            color: #e2e8f0;
+            overflow-x: hidden;
+            user-select: none;
+        }
+        .mono { font-family: 'JetBrains Mono', monospace; }
+
+        /* Patrón de cuadrícula técnica tipo plano de ingeniería */
+        .blueprint-grid {
+            background-color: #0c1322;
+            background-image: 
+                linear-gradient(to right, rgba(56, 189, 248, 0.06) 1px, transparent 1px),
+                linear-gradient(to bottom, rgba(56, 189, 248, 0.06) 1px, transparent 1px);
+            background-size: 28px 28px;
+        }
+
+        /* Textura de ladrillos para el Firewall NGFW igual que en la imagen */
+        .firewall-bricks {
+            background-color: #c2410c;
+            background-image: 
+                linear-gradient(335deg, rgba(0,0,0,0.28) 23px, transparent 23px),
+                linear-gradient(155deg, rgba(0,0,0,0.28) 23px, transparent 23px),
+                linear-gradient(335deg, rgba(0,0,0,0.28) 23px, transparent 23px),
+                linear-gradient(155deg, rgba(0,0,0,0.28) 23px, transparent 23px);
+            background-size: 58px 58px;
+            background-position: 0px 2px, 4px 35px, 29px 31px, 34px 6px;
+        }
+
+        .hw-node {
+            transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+            cursor: pointer;
+            position: relative;
+            z-index: 10;
+        }
+        .hw-node:hover {
+            transform: scale(1.04);
+            box-shadow: 0 0 18px rgba(56, 189, 248, 0.45);
+        }
+        .hw-node.selected {
+            outline: 2px solid #38bdf8;
+            outline-offset: 3px;
+            box-shadow: 0 0 22px rgba(56, 189, 248, 0.65);
+        }
+        .hw-node.down {
+            filter: grayscale(0.7);
+            border-color: #ef4444 !important;
+            box-shadow: 0 0 20px rgba(239, 68, 68, 0.65) !important;
+        }
+        .hw-node.active-glow {
+            box-shadow: 0 0 22px rgba(16, 185, 129, 0.75) !important;
+            border-color: #10b981 !important;
+        }
+
+        #netCanvas {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 5;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col">
+
+    <!-- Barra Superior Compacta de Control (Estilo Simulador) -->
+    <header class="bg-slate-950 border-b border-slate-800 px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 sticky top-0 z-40">
+        <div class="flex items-center gap-3">
+            <div class="w-8 h-8 rounded-lg bg-sky-500/20 border border-sky-400/40 flex items-center justify-center text-sky-400">
+                <i class="fa-solid fa-diagram-project"></i>
+            </div>
+            <div>
+                <h1 class="text-sm sm:text-base font-extrabold tracking-wide text-white uppercase">Topología de Red: Sistema de Gestión Aduanera de Importaciones</h1>
+                <div class="flex items-center gap-3 text-[11px] text-slate-400">
+                    <span><i class="fa-solid fa-circle text-[7px] text-emerald-400 mr-1"></i>Ley 168-21 / DGA-VUCE</span>
+                    <span id="hud-wan" class="mono text-emerald-400">WAN: FIBRA OM4 ACTIVA</span>
+                    <span id="hud-pwr" class="mono text-emerald-400">ENERGÍA: RED + UPS</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Botones de Acción Directa -->
+        <div class="flex flex-wrap items-center gap-2">
+            <button onclick="triggerPacketFlow('dua')" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-3 py-1.5 rounded-lg flex items-center gap-1.5 shadow-lg shadow-emerald-950/50 active:scale-95 transition">
+                <i class="fa-solid fa-paper-plane"></i> Enviar DUA (Importación)
+            </button>
+            <button id="btn-cut-fiber" onclick="toggleFiberCut()" class="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-amber-300 text-xs font-bold px-3 py-1.5 rounded-lg flex items-center gap-1.5 active:scale-95 transition">
+                <i class="fa-solid fa-scissors"></i> Cortar Fibra ISP1
+            </button>
+            <button id="btn-cut-power" onclick="togglePowerCut()" class="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-yellow-300 text-xs font-bold px-3 py-1.5 rounded-lg flex items-center gap-1.5 active:scale-95 transition">
+                <i class="fa-solid fa-bolt"></i> Apagón Eléctrico
+            </button>
+            <button onclick="triggerPacketFlow('attack')" class="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-rose-400 text-xs font-bold px-3 py-1.5 rounded-lg flex items-center gap-1.5 active:scale-95 transition">
+                <i class="fa-solid fa-skull-crossbones"></i> Ataque Externo
+            </button>
+        </div>
+    </header>
+
+    <!-- Lienzo Principal del Diagrama Interactivo -->
+    <main class="flex-1 blueprint-grid relative p-3 sm:p-5 overflow-x-auto" id="diagramBoard">
+        <canvas id="netCanvas"></canvas>
+
+        <div class="min-w-[1050px] max-w-[1440px] mx-auto relative z-10 flex flex-col gap-7">
+
+            <!-- FILA 1: NUBE INTERNET + ISP PRINCIPAL + ISP RESPALDO -->
+            <div class="grid grid-cols-12 items-center gap-4 pt-1">
+                <!-- ISP Fibra Óptica Principal -->
+                <div class="col-span-4 flex justify-end">
+                    <div id="node-isp1" onclick="inspect('isp1')" class="hw-node bg-slate-900/95 border-2 border-orange-400/80 rounded-xl px-4 py-2.5 flex items-center gap-3 shadow-lg">
+                        <div class="w-10 h-10 rounded-full bg-orange-500/20 text-orange-400 flex items-center justify-center text-lg">
+                            <i class="fa-solid fa-tower-broadcast"></i>
+                        </div>
+                        <div>
+                            <div class="text-xs font-extrabold text-white uppercase">ISP Fibra Óptica Principal</div>
+                            <div id="lbl-isp1" class="mono text-[10px] text-orange-300">FIBRA ÓPTICA OM4 • 10GbE</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Nube Central Internet / DGA / VUCE -->
+                <div class="col-span-4 flex justify-center">
+                    <div id="node-cloud" onclick="inspect('cloud')" class="hw-node bg-gradient-to-b from-sky-900/90 to-slate-900/95 border-2 border-sky-400 rounded-full px-7 py-3.5 text-center shadow-xl">
+                        <div class="text-sky-300 text-xl mb-0.5"><i class="fa-solid fa-cloud"></i></div>
+                        <div class="text-xs font-extrabold text-white tracking-wide">INTERNET (WAN REDUNDANTE)</div>
+                        <div class="mono text-[10px] text-sky-300">Portales DGA • VUCE • Navieras</div>
+                    </div>
+                </div>
+
+                <!-- ISP Enlace Satelital/MPLS Respaldo -->
+                <div class="col-span-4 flex justify-start">
+                    <div id="node-isp2" onclick="inspect('isp2')" class="hw-node bg-slate-900/95 border-2 border-blue-400/80 rounded-xl px-4 py-2.5 flex items-center gap-3 shadow-lg">
+                        <div class="w-10 h-10 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center text-lg">
+                            <i class="fa-solid fa-satellite"></i>
+                        </div>
+                        <div>
+                            <div class="text-xs font-extrabold text-white uppercase">ISP Enlace Satelital/MPLS</div>
+                            <div id="lbl-isp2" class="mono text-[10px] text-blue-300">TÚNELES 10GbE • RESPALDO</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- FILA 2: ROUTER DE BORDE SD-WAN -->
+            <div class="flex justify-center">
+                <div id="node-sdwan" onclick="inspect('sdwan')" class="hw-node bg-slate-900 border-2 border-cyan-400 rounded-xl px-6 py-2.5 flex items-center gap-3 shadow-xl">
+                    <div class="w-10 h-10 rounded-full bg-cyan-500/20 border border-cyan-400/50 text-cyan-300 flex items-center justify-center text-lg">
+                        <i class="fa-solid fa-arrows-split-up-and-left"></i>
+                    </div>
+                    <div>
+                        <div class="text-xs font-extrabold text-white uppercase">Router de Borde / SD-WAN (HA)</div>
+                        <div id="lbl-sdwan" class="mono text-[10px] text-cyan-300">CONMUTACIÓN AUTOMÁTICA FAILOVER</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- FILA 3: DMZ SEGMENTADA (IZQUIERDA) + FIREWALL NGFW DE LADRILLOS (CENTRO) -->
+            <div class="grid grid-cols-12 items-center gap-4">
+                <!-- Caja DMZ Segmentada -->
+                <div class="col-span-4 bg-slate-900/85 border-2 border-amber-400/60 rounded-2xl p-3.5 shadow-xl">
+                    <div class="text-[11px] font-extrabold text-amber-300 uppercase tracking-wider mb-2.5 flex items-center justify-between">
+                        <span><i class="fa-solid fa-shield-halved mr-1.5"></i>DMZ Segmentada</span>
+                        <span class="mono text-[9px] text-slate-400">CAT 6A / OM4</span>
+                    </div>
+                    <div class="grid grid-cols-2 gap-2.5">
+                        <div id="node-edi" onclick="inspect('edi')" class="hw-node bg-slate-800 border border-amber-400/50 rounded-xl p-2.5 text-center">
+                            <i class="fa-solid fa-server text-amber-400 text-lg mb-1"></i>
+                            <div class="text-[11px] font-bold text-white leading-tight">Servidor Pasarela EDI / API</div>
+                            <div class="mono text-[9px] text-amber-300 mt-0.5">XML / EDIFACT</div>
+                        </div>
+                        <div id="node-auth" onclick="inspect('auth')" class="hw-node bg-slate-800 border border-emerald-400/50 rounded-xl p-2.5 text-center">
+                            <i class="fa-solid fa-user-lock text-emerald-400 text-lg mb-1"></i>
+                            <div class="text-[11px] font-bold text-white leading-tight">Servidor Autenticación</div>
+                            <div class="mono text-[9px] text-emerald-300 mt-0.5">MFA / RADIUS</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Firewall NGFW (Estilo muro de ladrillos igual que en la imagen) -->
+                <div class="col-span-4 flex flex-col items-center">
+                    <div id="node-ngfw" onclick="inspect('ngfw')" class="hw-node firewall-bricks border-2 border-orange-300 rounded-xl w-44 h-24 flex flex-col items-center justify-center shadow-2xl relative">
+                        <div class="bg-slate-950/85 px-2.5 py-1 rounded-md border border-orange-400/60 text-center">
+                            <i class="fa-solid fa-fire text-orange-400 text-sm"></i>
+                            <div class="text-[10px] font-extrabold text-white uppercase">NGFW Cluster HA</div>
+                        </div>
+                    </div>
+                    <div class="text-center mt-1.5">
+                        <div class="text-[11px] font-extrabold text-white uppercase">Firewall de Próxima Generación</div>
+                        <div class="mono text-[10px] text-orange-300">IPS/IDS • VPN Site-to-Site DGA/VUCE</div>
+                    </div>
+                </div>
+
+                <!-- Etiquetas Técnicas Derecha (Reglas Activas) -->
+                <div class="col-span-4 bg-slate-900/70 border border-slate-700/80 rounded-xl p-3 text-[11px] space-y-1">
+                    <div class="font-bold text-sky-300 uppercase text-[10px] tracking-wider"><i class="fa-solid fa-list-check mr-1"></i>Políticas de Seguridad Activas</div>
+                    <div class="mono text-[10px] text-slate-300">• Inspección profunda IPS/IDS en tiempo real</div>
+                    <div class="mono text-[10px] text-slate-300">• Túnel cifrado VPN IPsec hacia DGA / Navieras</div>
+                    <div class="mono text-[10px] text-slate-300">• Aislamiento estricto DMZ ↔ VLANs Internas</div>
+                </div>
+            </div>
+
+            <!-- FILA 4: CORE SWITCH (L3) - ALTA DISPONIBILIDAD -->
+            <div class="flex flex-col items-center">
+                <div id="node-core" onclick="inspect('core')" class="hw-node bg-gradient-to-r from-slate-900 via-sky-950 to-slate-900 border-2 border-sky-400 rounded-xl px-8 py-2.5 flex items-center gap-4 shadow-xl">
+                    <div class="flex gap-1 text-emerald-400 text-xs">
+                        <i class="fa-solid fa-circle animate-pulse"></i>
+                        <i class="fa-solid fa-circle"></i>
+                        <i class="fa-solid fa-circle"></i>
+                    </div>
+                    <div class="text-center">
+                        <div class="text-xs font-extrabold text-white uppercase tracking-wider">Core Switch (L3) - Alta Disponibilidad</div>
+                        <div class="mono text-[10px] text-sky-300">BACKBONE INTER-VLAN 10GbE • REDUNDANCIA VRRP</div>
+                    </div>
+                    <i class="fa-solid fa-network-wired text-sky-400 text-lg"></i>
+                </div>
+            </div>
+
+            <!-- FILA 5: LAS 4 VLANS (IGUAL QUE EN LA IMAGEN) -->
+            <div class="grid grid-cols-12 gap-3.5">
+
+                <!-- VLAN 10: SERVIDORES CRÍTICOS (5 columnas) -->
+                <div class="col-span-5 bg-slate-900/85 border-2 border-emerald-500/50 rounded-2xl p-3">
+                    <div class="text-[11px] font-extrabold text-emerald-400 uppercase tracking-wider mb-2.5 flex justify-between">
+                        <span>VLAN 10 - Servidores Críticos</span>
+                        <span class="mono text-[9px] bg-emerald-500/20 px-1.5 py-0.5 rounded">HA CLUSTER</span>
+                    </div>
+                    <div class="grid grid-cols-4 gap-2">
+                        <div id="node-sga" onclick="inspect('sga')" class="hw-node bg-slate-800 border border-slate-600 rounded-xl p-2 text-center">
+                            <i class="fa-solid fa-cubes text-amber-400 text-lg mb-1"></i>
+                            <div class="text-[10px] font-bold text-white leading-tight">Clúster SGA</div>
+                            <div class="text-[8px] text-slate-400 mt-0.5">Importaciones</div>
+                        </div>
+                        <div id="node-db" onclick="inspect('db')" class="hw-node bg-slate-800 border border-slate-600 rounded-xl p-2 text-center">
+                            <i class="fa-solid fa-database text-sky-400 text-lg mb-1"></i>
+                            <div class="text-[10px] font-bold text-white leading-tight">Clúster BD SQL</div>
+                            <div class="text-[8px] text-slate-400 mt-0.5">Alta Disp.</div>
+                        </div>
+                        <div id="node-ocr" onclick="inspect('ocr')" class="hw-node bg-slate-800 border border-slate-600 rounded-xl p-2 text-center">
+                            <i class="fa-solid fa-file-lines text-emerald-400 text-lg mb-1"></i>
+                            <div class="text-[10px] font-bold text-white leading-tight">Gestión Doc.</div>
+                            <div class="text-[8px] text-slate-400 mt-0.5">Motor OCR</div>
+                        </div>
+                        <div id="node-backup" onclick="inspect('backup')" class="hw-node bg-slate-800 border border-slate-600 rounded-xl p-2 text-center">
+                            <i class="fa-solid fa-hard-drive text-teal-400 text-lg mb-1"></i>
+                            <div class="text-[10px] font-bold text-white leading-tight">Backup NAS</div>
+                            <div class="text-[8px] text-slate-400 mt-0.5">Regla 3-2-1</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- VLAN 20: OPERACIONES ADUANERAS (3 columnas) -->
+                <div class="col-span-3 bg-slate-900/85 border-2 border-sky-500/50 rounded-2xl p-3">
+                    <div class="text-[11px] font-extrabold text-sky-400 uppercase tracking-wider mb-2.5 text-center">
+                        VLAN 20 - Operaciones Aduaneras
+                    </div>
+                    <div class="grid grid-cols-3 gap-1.5">
+                        <div id="node-pc-ops" onclick="inspect('pc_ops')" class="hw-node bg-slate-800 border border-slate-600 rounded-xl p-2 text-center">
+                            <i class="fa-solid fa-desktop text-sky-400 text-base mb-1"></i>
+                            <div class="text-[9px] font-bold text-white leading-tight">Estaciones Analistas</div>
+                        </div>
+                        <div id="node-scan" onclick="inspect('scan')" class="hw-node bg-slate-800 border border-slate-600 rounded-xl p-2 text-center">
+                            <i class="fa-solid fa-print text-cyan-300 text-base mb-1"></i>
+                            <div class="text-[9px] font-bold text-white leading-tight">Escáneres Alta Vel.</div>
+                        </div>
+                        <div id="node-barcode" onclick="inspect('barcode')" class="hw-node bg-slate-800 border border-slate-600 rounded-xl p-2 text-center">
+                            <i class="fa-solid fa-barcode text-indigo-300 text-base mb-1"></i>
+                            <div class="text-[9px] font-bold text-white leading-tight">Lectores Códigos</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- VLAN 30: ADMINISTRACIÓN Y FINANZAS (2 columnas) -->
+                <div class="col-span-2 bg-slate-900/85 border-2 border-purple-500/50 rounded-2xl p-3">
+                    <div class="text-[11px] font-extrabold text-purple-400 uppercase tracking-wider mb-2.5 text-center">
+                        VLAN 30 - Finanzas
+                    </div>
+                    <div class="grid grid-cols-2 gap-1.5">
+                        <div id="node-fin" onclick="inspect('fin')" class="hw-node bg-slate-800 border border-slate-600 rounded-xl p-2 text-center">
+                            <i class="fa-solid fa-file-invoice-dollar text-purple-400 text-base mb-1"></i>
+                            <div class="text-[9px] font-bold text-white leading-tight">Tributos y Factura</div>
+                        </div>
+                        <div id="node-aud" onclick="inspect('aud')" class="hw-node bg-slate-800 border border-slate-600 rounded-xl p-2 text-center">
+                            <i class="fa-solid fa-clipboard-check text-fuchsia-400 text-base mb-1"></i>
+                            <div class="text-[9px] font-bold text-white leading-tight">Equipo Auditoría</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- VLAN 40: GESTIÓN Y SEGURIDAD OOB (2 columnas) -->
+                <div class="col-span-2 bg-slate-900/85 border-2 border-rose-500/50 rounded-2xl p-3">
+                    <div class="text-[11px] font-extrabold text-rose-400 uppercase tracking-wider mb-2.5 text-center">
+                        VLAN 40 - Seg. OOB
+                    </div>
+                    <div class="grid grid-cols-2 gap-1.5">
+                        <div id="node-siem" onclick="inspect('siem')" class="hw-node bg-slate-800 border border-slate-600 rounded-xl p-2 text-center">
+                            <i class="fa-solid fa-shield-virus text-rose-400 text-base mb-1"></i>
+                            <div class="text-[9px] font-bold text-white leading-tight">Consola SIEM/EDR</div>
+                        </div>
+                        <div id="node-patch" onclick="inspect('patch')" class="hw-node bg-slate-800 border border-slate-600 rounded-xl p-2 text-center">
+                            <i class="fa-solid fa-wrench text-amber-400 text-base mb-1"></i>
+                            <div class="text-[9px] font-bold text-white leading-tight">Parches y Firewalls</div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- FILA 6: INFRAESTRUCTURA FÍSICA Y ENERGÍA (IGUAL QUE EN LA IMAGEN) -->
+            <div class="bg-slate-900/90 border-2 border-yellow-500/50 rounded-2xl p-3 flex items-center justify-between gap-4">
+                <div class="flex items-center gap-2.5">
+                    <i class="fa-solid fa-plug-circle-bolt text-yellow-400 text-xl"></i>
+                    <div>
+                        <div class="text-xs font-extrabold text-yellow-400 uppercase">Infraestructura Física y Energía</div>
+                        <div class="mono text-[10px] text-slate-400">ALIMENTACIÓN ININTERRUMPIDA HACIA CORE SWITCH Y SERVIDORES</div>
+                    </div>
+                </div>
+
+                <div class="flex items-center gap-4">
+                    <div id="node-ups" onclick="inspect('ups')" class="hw-node bg-slate-800 border border-yellow-400/60 rounded-xl px-4 py-2 flex items-center gap-3">
+                        <i class="fa-solid fa-battery-full text-yellow-400 text-xl"></i>
+                        <div>
+                            <div class="text-xs font-bold text-white">UPS Industrial Online</div>
+                            <div id="lbl-ups" class="mono text-[10px] text-emerald-400">DOBLE CONVERSIÓN • 100%</div>
+                        </div>
+                    </div>
+
+                    <div id="node-gen" onclick="inspect('gen')" class="hw-node bg-slate-800 border border-amber-500/60 rounded-xl px-4 py-2 flex items-center gap-3">
+                        <i class="fa-solid fa-industry text-amber-400 text-xl"></i>
+                        <div>
+                            <div class="text-xs font-bold text-white">Generador Eléctrico Automático</div>
+                            <div id="lbl-gen" class="mono text-[10px] text-slate-400">TRANSFERENCIA ATS STANDBY</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+    <!-- Barra Inferior Tipo Terminal / Inspector Rápido de Paquetes y Nodos -->
+    <footer class="bg-slate-950 border-t border-slate-800 px-4 py-2.5 sticky bottom-0 z-40">
+        <div class="max-w-[1440px] mx-auto grid grid-cols-1 lg:grid-cols-12 gap-3 items-center">
+            <!-- Info rápida del equipo seleccionado -->
+            <div class="lg:col-span-7 flex items-center gap-3 bg-slate-900/90 border border-slate-800 rounded-xl px-3.5 py-2">
+                <div class="w-9 h-9 rounded-lg bg-sky-500/20 text-sky-400 flex items-center justify-center shrink-0">
+                    <i id="foot-icon" class="fa-solid fa-cubes"></i>
+                </div>
+                <div class="min-w-0 flex-1">
+                    <div class="flex items-center gap-2">
+                        <span id="foot-title" class="text-xs font-extrabold text-white truncate">Clúster de Servidores SGA (Importación)</span>
+                        <span id="foot-tag" class="mono text-[9px] px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-300 shrink-0">VLAN 10</span>
+                    </div>
+                    <p id="foot-desc" class="text-[11px] text-slate-300 truncate">Procesa declaraciones DUA, aranceles e ITBIS bajo la Ley 168-21. Su alta disponibilidad evita demoras en puertos.</p>
+                </div>
+            </div>
+
+            <!-- Monitor de tráfico en vivo (1 línea activa) -->
+            <div class="lg:col-span-5 bg-black/70 border border-slate-800 rounded-xl px-3.5 py-2 flex items-center gap-2.5">
+                <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping shrink-0"></span>
+                <div id="live-ticker" class="mono text-[11px] text-emerald-400 truncate">
+                    [SISTEMA LISTO] Haz clic en cualquier equipo o presiona "Enviar DUA" para simular tráfico.
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        // Datos concisos por nodo para inspección inmediata sin saturar la pantalla
+        const infoDB = {
+            isp1: { title: "ISP Fibra Óptica Principal (OM4)", tag: "WAN PRIMARIA", icon: "fa-tower-broadcast", desc: "Enlace principal de alta velocidad hacia DGA/VUCE. Si se corta, el SD-WAN conmuta en milisegundos al ISP 2." },
+            isp2: { title: "ISP Enlace Satelital / MPLS Respaldo", tag: "WAN BACKUP", icon: "fa-satellite", desc: "Ruta física independiente con túneles 10GbE para mantener la continuidad operativa ante fallos del proveedor principal." },
+            cloud: { title: "Internet / Portales DGA, VUCE y Navieras", tag: "EXTERIOR", icon: "fa-cloud", desc: "Sistemas externos donde se transmiten manifiestos, declaraciones de importación y autorizaciones de levante." },
+            sdwan: { title: "Router de Borde / SD-WAN (HA)", tag: "BORDE HA", icon: "fa-arrows-split-up-and-left", desc: "Balancea enlaces ISP1/ISP2 y ejecuta failover automático para no interrumpir sesiones aduaneras." },
+            ngfw: { title: "Firewall de Próxima Generación (NGFW)", tag: "SEGURIDAD", icon: "fa-fire", desc: "Clúster Activo-Pasivo con IPS/IDS, filtrado web y túneles VPN Site-to-Site cifrados hacia aduanas." },
+            edi: { title: "Servidor Pasarela EDI / API Aduanas", tag: "DMZ", icon: "fa-server", desc: "Traduce expedientes del SGA a formato XML/EDIFACT y los envía de forma aislada desde la DMZ." },
+            auth: { title: "Servidor de Autenticación (MFA / RADIUS)", tag: "DMZ / IAM", icon: "fa-user-lock", desc: "Exige doble factor de autenticación (MFA) y control por roles antes de autorizar cambios en importaciones." },
+            core: { title: "Core Switch Capa 3 (Alta Disponibilidad)", tag: "NÚCLEO L3", icon: "fa-network-wired", desc: "Conmuta tráfico interno 10GbE entre VLANs y recibe alimentación protegida desde el UPS Industrial." },
+            sga: { title: "Clúster de Servidores SGA (Importación)", tag: "VLAN 10", icon: "fa-cubes", desc: "Motor central que calcula aranceles/tributos y genera la DUA conforme a la Ley 168-21." },
+            db: { title: "Clúster de Bases de Datos SQL (HA)", tag: "VLAN 10", icon: "fa-database", desc: "Almacena manifiestos, facturas y bitácoras auditables con replicación en tiempo real." },
+            ocr: { title: "Servidor de Gestión Documental y OCR", tag: "VLAN 10", icon: "fa-file-lines", desc: "Extrae datos automáticamente de facturas comerciales y BL/AWB escaneados." },
+            backup: { title: "Servidor de Backup (NAS / SAN)", tag: "VLAN 10", icon: "fa-hard-drive", desc: "Copias automatizadas inmutables bajo regla 3-2-1 para recuperación rápida ante incidentes." },
+            pc_ops: { title: "Estaciones de Trabajo Analistas", tag: "VLAN 20", icon: "fa-desktop", desc: "Puestos operativos con doble monitor y agente EDR para digitación y clasificación arancelaria." },
+            scan: { title: "Escáneres Documentales Alta Velocidad", tag: "VLAN 20", icon: "fa-print", desc: "Digitalizan expedientes físicos de importación directamente hacia el repositorio OCR." },
+            barcode: { title: "Lectores de Códigos de Barras", tag: "VLAN 20", icon: "fa-barcode", desc: "Verifican guías, bultos y contenedores en procesos de recepción y despacho." },
+            fin: { title: "Contabilidad, Tributos y Facturación", tag: "VLAN 30", icon: "fa-file-invoice-dollar", desc: "Gestiona liquidaciones aduaneras, pagos de impuestos y facturación al importador." },
+            aud: { title: "Equipo de Auditoría y Cumplimiento", tag: "VLAN 30", icon: "fa-clipboard-check", desc: "Verifica trazabilidad documental y cumplimiento normativo antes y después del levante." },
+            siem: { title: "Consola SIEM / Monitoreo EDR", tag: "VLAN 40 OOB", icon: "fa-shield-virus", desc: "Supervisa alertas de seguridad, logs de firewall y salud de servidores en tiempo real." },
+            patch: { title: "Gestión de Parches y Firewalls", tag: "VLAN 40 OOB", icon: "fa-wrench", desc: "Red aislada Out-of-Band para administrar equipos críticos y actualizar vulnerabilidades." },
+            ups: { title: "UPS Industrial Online (Doble Conversión)", tag: "ENERGÍA", icon: "fa-battery-full", desc: "Sostiene servidores y red sin microcortes (0 ms) ante apagones de la red eléctrica." },
+            gen: { title: "Generador Eléctrico Automático", tag: "RESPALDO", icon: "fa-industry", desc: "Arranca automáticamente mediante transferencia ATS para respaldar cargas prolongadas." }
+        };
+
+        const sim = {
+            fiberCut: false,
+            powerCut: false,
+            packets: []
+        };
+
+        const canvas = document.getElementById('netCanvas');
+        const ctx = canvas.getContext('2d');
+        const board = document.getElementById('diagramBoard');
+
+        // Conexiones físicas/lógicas con color y etiqueta de cable igual que en la imagen
+        const cables = [
+            { from: 'isp1', to: 'sdwan', color: '#f97316', label: 'FIBRA OM4' },
+            { from: 'isp2', to: 'sdwan', color: '#3b82f6', label: 'TÚNEL 10GbE' },
+            { from: 'cloud', to: 'sdwan', color: '#38bdf8', label: '' },
+            { from: 'sdwan', to: 'ngfw', color: '#22d3ee', label: '' },
+            { from: 'edi', to: 'ngfw', color: '#facc15', label: 'CAT 6A / OM4' },
+            { from: 'auth', to: 'ngfw', color: '#34d399', label: '' },
+            { from: 'ngfw', to: 'core', color: '#fb923c', label: '' },
+            { from: 'core', to: 'sga', color: '#10b981', label: '' },
+            { from: 'core', to: 'db', color: '#10b981', label: '' },
+            { from: 'core', to: 'pc_ops', color: '#38bdf8', label: '' },
+            { from: 'core', to: 'fin', color: '#a855f7', label: '' },
+            { from: 'core', to: 'siem', color: '#f43f5e', label: '' },
+            { from: 'ups', to: 'core', color: '#eab308', label: 'ENERGÍA CRÍTICA' },
+            { from: 'gen', to: 'ups', color: '#f59e0b', label: 'ATS' }
+        ];
+
+        function inspect(id) {
+            document.querySelectorAll('.hw-node').forEach(n => n.classList.remove('selected'));
+            const el = document.getElementById('node-' + id);
+            if (el) el.classList.add('selected');
+
+            const d = infoDB[id];
+            if (!d) return;
+            document.getElementById('foot-title').textContent = d.title;
+            document.getElementById('foot-tag').textContent = d.tag;
+            document.getElementById('foot-desc').textContent = d.desc;
+            document.getElementById('foot-icon').className = 'fa-solid ' + d.icon;
+        }
+
+        function setTicker(msg, colorClass = 'text-emerald-400') {
+            const t = document.getElementById('live-ticker');
+            t.className = `mono text-[11px] truncate ${colorClass}`;
+            t.textContent = msg;
+        }
+
+        function pulseNode(id, ms = 1100) {
+            const el = document.getElementById('node-' + id);
+            if (!el) return;
+            el.classList.add('active-glow');
+            setTimeout(() => el.classList.remove('active-glow'), ms);
+        }
+
+        function sendPacket(route, color, tag) {
+            sim.packets.push({ route, idx: 0, t: 0, speed: 0.035, color, tag });
+        }
+
+        function triggerPacketFlow(mode) {
+            const wanNode = sim.fiberCut ? 'isp2' : 'isp1';
+
+            if (mode === 'dua') {
+                setTicker('[PASO 1/4] Escaneo OCR y captura DUA en VLAN 20 → Procesando en Clúster SGA y BD SQL...', 'text-sky-400');
+                pulseNode('pc_ops'); pulseNode('scan');
+                sendPacket(['pc_ops', 'core', 'sga', 'db'], '#38bdf8', 'DUA');
+
+                setTimeout(() => {
+                    setTicker('[PASO 2/4] Backup NAS (3-2-1) listo → Traduciendo XML en Pasarela EDI (DMZ)...', 'text-amber-300');
+                    pulseNode('sga'); pulseNode('db'); pulseNode('backup'); pulseNode('edi');
+                    sendPacket(['sga', 'core', 'ngfw', 'edi'], '#10b981', 'XML');
+                }, 950);
+
+                setTimeout(() => {
+                    setTicker(`[PASO 3/4] Firewall NGFW cifrando túnel VPN vía ${wanNode.toUpperCase()} hacia DGA/VUCE...`, 'text-emerald-400');
+                    pulseNode('ngfw'); pulseNode('sdwan'); pulseNode(wanNode);
+                    sendPacket(['edi', 'ngfw', 'sdwan', wanNode, 'cloud'], '#10b981', 'VPN-DGA');
+                }, 1900);
+
+                setTimeout(() => {
+                    setTicker('[PASO 4/4] DGA autoriza levante ✓ → Liquidación enviada a Finanzas (VLAN 30) y log a SIEM.', 'text-emerald-300');
+                    pulseNode('cloud'); pulseNode('fin'); pulseNode('siem');
+                    sendPacket(['cloud', wanNode, 'sdwan', 'ngfw', 'core', 'fin'], '#c084fc', 'LEVANTE OK');
+                }, 3000);
+            }
+
+            if (mode === 'attack') {
+                setTicker('[ALERTA] Intento de intrusión / malware detectado desde exterior hacia perímetro...', 'text-rose-400');
+                sendPacket([wanNode, 'sdwan', 'ngfw'], '#ef4444', 'INTRUSIÓN');
+
+                setTimeout(() => {
+                    pulseNode('ngfw', 1600); pulseNode('siem', 1800);
+                    setTicker('[BLOQUEADO] Firewall NGFW (IPS) detuvo el ataque y envió alerta a Consola SIEM (VLAN 40).', 'text-amber-300');
+                    sendPacket(['ngfw', 'core', 'siem'], '#f59e0b', 'SIEM LOG');
+                }, 1050);
+            }
+        }
+
+        function toggleFiberCut() {
+            sim.fiberCut = !sim.fiberCut;
+            const n1 = document.getElementById('node-isp1');
+            const n2 = document.getElementById('node-isp2');
+            const btn = document.getElementById('btn-cut-fiber');
+
+            if (sim.fiberCut) {
+                n1.classList.add('down');
+                n2.classList.add('active-glow');
+                document.getElementById('lbl-isp1').textContent = 'CORTE DE FIBRA • OFFLINE';
+                document.getElementById('lbl-isp2').textContent = 'ACTIVO • FAILOVER SD-WAN';
+                document.getElementById('hud-wan').textContent = 'WAN: FAILOVER ISP2 ACTIVO';
+                document.getElementById('hud-wan').className = 'mono text-amber-400';
+                btn.classList.add('border-rose-500', 'text-rose-300');
+                setTicker('[FAILOVER] Fibra ISP1 cortada. Router SD-WAN redirigió el tráfico al Enlace Satelital/MPLS ISP2.', 'text-amber-300');
+            } else {
+                n1.classList.remove('down');
+                n2.classList.remove('active-glow');
+                document.getElementById('lbl-isp1').textContent = 'FIBRA ÓPTICA OM4 • 10GbE';
+                document.getElementById('lbl-isp2').textContent = 'TÚNELES 10GbE • RESPALDO';
+                document.getElementById('hud-wan').textContent = 'WAN: FIBRA OM4 ACTIVA';
+                document.getElementById('hud-wan').className = 'mono text-emerald-400';
+                btn.classList.remove('border-rose-500', 'text-rose-300');
+                setTicker('[RESTAURADO] Enlace principal Fibra Óptica OM4 operativo nuevamente.', 'text-emerald-400');
+            }
+        }
+
+        function togglePowerCut() {
+            sim.powerCut = !sim.powerCut;
+            const ups = document.getElementById('node-ups');
+            const gen = document.getElementById('node-gen');
+            const btn = document.getElementById('btn-cut-power');
+
+            if (sim.powerCut) {
+                ups.classList.add('active-glow');
+                gen.classList.add('active-glow');
+                document.getElementById('lbl-ups').textContent = 'BATERÍA ONLINE • 0ms';
+                document.getElementById('lbl-gen').textContent = 'PLANTA ENCENDIDA • ATS ON';
+                document.getElementById('hud-pwr').textContent = 'ENERGÍA: UPS + GENERADOR';
+                document.getElementById('hud-pwr').className = 'mono text-yellow-300';
+                btn.classList.add('border-yellow-400', 'bg-yellow-950/40');
+                sendPacket(['gen', 'ups', 'core'], '#facc15', 'ENERGÍA');
+                setTicker('[RESPALDO ENERGÉTICO] Apagón comercial detectado: UPS sostiene servidores y Generador arrancó por ATS.', 'text-yellow-300');
+            } else {
+                ups.classList.remove('active-glow');
+                gen.classList.remove('active-glow');
+                document.getElementById('lbl-ups').textContent = 'DOBLE CONVERSIÓN • 100%';
+                document.getElementById('lbl-gen').textContent = 'TRANSFERENCIA ATS STANDBY';
+                document.getElementById('hud-pwr').textContent = 'ENERGÍA: RED + UPS';
+                document.getElementById('hud-pwr').className = 'mono text-emerald-400';
+                btn.classList.remove('border-yellow-400', 'bg-yellow-950/40');
+                setTicker('[ENERGÍA NORMAL] Suministro eléctrico comercial restablecido.', 'text-emerald-400');
+            }
+        }
+
+        function centerOf(id) {
+            const el = document.getElementById('node-' + id);
+            if (!el) return null;
+            const r = el.getBoundingClientRect();
+            const b = board.getBoundingClientRect();
+            return { x: r.left - b.left + r.width / 2, y: r.top - b.top + r.height / 2 };
+        }
+
+        function resize() {
+            canvas.width = board.scrollWidth;
+            canvas.height = board.scrollHeight;
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Dibujar cables con estilo técnico
+            cables.forEach(c => {
+                const a = centerOf(c.from);
+                const b = centerOf(c.to);
+                if (!a || !b) return;
+
+                ctx.beginPath();
+                ctx.moveTo(a.x, a.y);
+                ctx.lineTo(b.x, b.y);
+
+                const isCut = sim.fiberCut && (c.from === 'isp1' || c.to === 'isp1');
+                ctx.strokeStyle = isCut ? '#ef4444' : c.color;
+                ctx.lineWidth = isCut ? 2 : 2.6;
+                ctx.setLineDash(isCut ? [6, 6] : []);
+                ctx.stroke();
+                ctx.setLineDash([]);
+
+                // Etiqueta sobre el cable (Fibra OM4, Túnel 10GbE, Cat 6A)
+                if (c.label) {
+                    const mx = (a.x + b.x) / 2;
+                    const my = (a.y + b.y) / 2;
+                    ctx.font = 'bold 9px JetBrains Mono, monospace';
+                    ctx.fillStyle = isCut ? '#fca5a5' : '#cbd5e1';
+                    ctx.fillText(isCut ? 'CORTE' : c.label, mx + 6, my - 4);
+                }
+            });
+
+            // Animar paquetes circulando por los cables
+            for (let i = sim.packets.length - 1; i >= 0; i--) {
+                const p = sim.packets[i];
+                if (p.idx >= p.route.length - 1) {
+                    sim.packets.splice(i, 1);
+                    continue;
+                }
+                p.t += p.speed;
+                if (p.t >= 1) {
+                    p.t = 0;
+                    p.idx++;
+                    if (p.idx >= p.route.length - 1) {
+                        sim.packets.splice(i, 1);
+                        continue;
+                    }
+                }
+                const s = centerOf(p.route[p.idx]);
+                const e = centerOf(p.route[p.idx + 1]);
+                if (!s || !e) continue;
+
+                const x = s.x + (e.x - s.x) * p.t;
+                const y = s.y + (e.y - s.y) * p.t;
+
+                ctx.beginPath();
+                ctx.arc(x, y, 6.5, 0, Math.PI * 2);
+                ctx.fillStyle = p.color;
+                ctx.shadowColor = p.color;
+                ctx.shadowBlur = 14;
+                ctx.fill();
+                ctx.shadowBlur = 0;
+
+                if (p.tag) {
+                    ctx.font = 'bold 10px JetBrains Mono, monospace';
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillText(p.tag, x + 10, y + 3);
+                }
+            }
+
+            requestAnimationFrame(draw);
+        }
+
+        window.addEventListener('resize', resize);
+        board.addEventListener('scroll', resize);
+        window.onload = function () {
+            resize();
+            inspect('sga');
+            draw();
+        };
+    </script>
+</body>
+</html>
